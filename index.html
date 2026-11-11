@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BLINGRINGSALOTTO</title>
+<style>
+  :root { --bg: #1a1a1a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #stage {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none;
+  }
+  .book { flex: none; }
+
+  /* loader */
+  #loader {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center;
+    color: #bbb; font: 14px/1.4 system-ui, sans-serif; text-align: center; padding: 24px;
+  }
+  .spin {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid #444; border-top-color: #ddd;
+    animation: s 0.9s linear infinite;
+  }
+  @keyframes s { to { transform: rotate(360deg); } }
+
+  /* gira lo schermo */
+  #rotate {
+    position: fixed; inset: 0; z-index: 10;
+    display: none; flex-direction: column; gap: 22px;
+    align-items: center; justify-content: center;
+    background: var(--bg); color: #eee;
+    font: 600 18px/1.3 system-ui, sans-serif; letter-spacing: .02em;
+  }
+  #rotate svg { width: 72px; height: 72px; animation: r 2.2s ease-in-out infinite; }
+  @keyframes r { 0%, 25% { transform: rotate(0); } 55%, 100% { transform: rotate(-90deg); } }
+  @media (orientation: portrait) and (pointer: coarse) {
+    #rotate { display: flex; }
+    #stage, #loader { visibility: hidden; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div id="loader"><div class="spin"></div><div id="progress"></div></div>
+
+<div id="rotate">
+  <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round">
+    <rect x="20" y="6" width="24" height="52" rx="4"/>
+    <line x1="29" y1="51" x2="35" y2="51" stroke-linecap="round"/>
+  </svg>
+  <div>Gira lo schermo</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.min.js"></script>
+<script>
+(() => {
+  const PDF_URL = 'BLINGRINGSALOTTO.pdf';
+  const BG = '#1a1a1a';   // colore attorno alle pagine più strette (es. copertina)
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const stage = document.getElementById('stage');
+  const loader = document.getElementById('loader');
+  const progress = document.getElementById('progress');
+
+  let boxAspect = 297 / 210;   // proporzione di UNA metà (A4 orizzontale, letta dal PDF)
+  let urls = [];
+  let pageFlip = null;
+  let currentIndex = 0;
+
+  // dimensione di una metà: le due affiancate sono le più grandi che entrano nello schermo
+  function pageSize() {
+    const vw = window.innerWidth * 0.96, vh = window.innerHeight * 0.94;
+    let w = vw / 2, h = w / boxAspect;
+    if (h > vh) { h = vh; w = h * boxAspect; }
+    return { w: Math.floor(w), h: Math.floor(h) };
+  }
+
+  // crea (o ricrea) il libro: ogni pagina del PDF = una doppia pagina (sinistra + destra)
+  function build() {
+    if (!urls.length) return;
+    if (pageFlip) {
+      currentIndex = pageFlip.getCurrentPageIndex();
+      try { pageFlip.destroy(); } catch (e) {}
+      stage.innerHTML = '';
+    }
+    const { w, h } = pageSize();
+    const el = document.createElement('div');
+    el.className = 'book';
+    el.style.width = (w * 2) + 'px';
+    el.style.height = h + 'px';
+    stage.appendChild(el);
+
+    pageFlip = new St.PageFlip(el, {
+      width: w,
+      height: h,
+      size: 'fixed',
+      autoSize: false,
+      usePortrait: false,         // sempre doppia pagina
+      showCover: false,           // la prima pagina del PDF è già una doppia
+      startPage: currentIndex,
+      drawShadow: true,
+      maxShadowOpacity: 0.5,
+      flippingTime: 1000,
+      showPageCorners: true,
+      mobileScrollSupport: false,
+      swipeDistance: 30
+    });
+    pageFlip.loadFromImages(urls);
+  }
+
+  let t;
+  const rebuildSoon = () => { clearTimeout(t); t = setTimeout(build, 200); };
+  window.addEventListener('resize', rebuildSoon);
+  window.addEventListener('orientationchange', rebuildSoon);
+
+  window.addEventListener('keydown', e => {
+    if (!pageFlip) return;
+    if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); pageFlip.flipNext(); }
+    if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); pageFlip.flipPrev(); }
+  });
+
+  const toBlobURL = c => new Promise(res =>
+    c.toBlob(b => res(URL.createObjectURL(b)), 'image/jpeg', 0.9));
+
+  (async () => {
+    try {
+      const pdf = await pdfjsLib.getDocument(PDF_URL).promise;
+      const n = pdf.numPages;
+
+      // la metà "base" è la più larga del PDF (A4 orizzontale)
+      const sizes = [];
+      for (let i = 1; i <= n; i++) {
+        const vp = (await pdf.getPage(i)).getViewport({ scale: 1 });
+        sizes.push({ w: vp.width, h: vp.height });
+      }
+      boxAspect = Math.max(...sizes.map(s => (s.w / 2) / s.h));
+
+      // risoluzione di rendering adatta allo schermo
+      const dpr = window.devicePixelRatio || 1;
+      const boxW = Math.round(Math.min(1500, Math.max(screen.width, screen.height) * dpr / 2));
+      const boxH = Math.round(boxW / boxAspect);
+
+      const tmp = document.createElement('canvas');
+      const box = document.createElement('canvas');
+      box.width = boxW; box.height = boxH;
+      const bctx = box.getContext('2d');
+
+      for (let i = 1; i <= n; i++) {
+        progress.textContent = Math.round(((i - 1) / n) * 100) + '%';
+        const page = await pdf.getPage(i);
+        const base = page.getViewport({ scale: 1 });
+        // ogni metà entra intera nel riquadro; le metà più strette (copertina)
+        // restano attaccate alla piega centrale, con lo sfondo sui lati esterni
+        const scale = Math.min(boxW / (base.width / 2), boxH / base.height);
+        const vp = page.getViewport({ scale });
+        tmp.width = Math.floor(vp.width);
+        tmp.height = Math.floor(vp.height);
+        const ctx = tmp.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, tmp.width, tmp.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        page.cleanup();
+
+        const hw = Math.floor(tmp.width / 2), h = tmp.height;
+        const y = Math.round((boxH - h) / 2);
+
+        // metà sinistra → allineata a destra (verso la piega)
+        bctx.fillStyle = BG;
+        bctx.fillRect(0, 0, boxW, boxH);
+        bctx.drawImage(tmp, 0, 0, hw, h, boxW - hw, y, hw, h);
+        urls.push(await toBlobURL(box));
+
+        // metà destra → allineata a sinistra (verso la piega)
+        bctx.fillRect(0, 0, boxW, boxH);
+        bctx.drawImage(tmp, hw, 0, tmp.width - hw, h, 0, y, tmp.width - hw, h);
+        urls.push(await toBlobURL(box));
+      }
+      tmp.width = tmp.height = box.width = box.height = 0;
+
+      loader.style.display = 'none';
+      build();
+    } catch (err) {
+      console.error(err);
+      loader.innerHTML = 'Impossibile caricare il PDF.';
+    }
+  })();
+})();
+</script>
+</body>
+</html>
